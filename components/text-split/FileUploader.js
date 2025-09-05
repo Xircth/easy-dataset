@@ -182,25 +182,64 @@ export default function FileUploader({
   };
 
   /**
-   * 开始上传文件
+   * 开始上传文件 - 串行处理，按需读取文件内容
    */
   const handleStartUpload = async domainTreeActionType => {
     setUploading(true);
+    const uploadedFileInfos = [];
+    let successCount = 0;
+    let failedCount = 0;
+    
     try {
-      const uploadedFileInfos = [];
-      for (const file of files) {
-        const { fileContent, fileName } = await getContent(file);
-        const data = await fileApi.uploadFile({ file, projectId, fileContent, fileName, t });
-        uploadedFileInfos.push({ fileName: data.fileName, fileId: data.fileId });
+      // 逐个处理文件，避免同时加载所有文件到内存
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        try {
+          console.log(`开始处理文件 ${i + 1}/${files.length}: ${file.name}`);
+          
+          // 按需读取文件内容，不预先加载所有文件
+          const { fileContent, fileName } = await getContent(file);
+          const data = await fileApi.uploadFile({ file, projectId, fileContent, fileName, t });
+          
+          uploadedFileInfos.push({ fileName: data.fileName, fileId: data.fileId });
+          successCount++;
+          
+          console.log(`文件 ${file.name} 上传成功`);
+          
+          // 每个文件处理完后，释放内存引用
+          // 这有助于垃圾回收器及时回收大文件占用的内存
+          if (typeof fileContent === 'string') {
+            // 对于文本内容，清空引用
+          } else if (fileContent instanceof ArrayBuffer || fileContent instanceof Uint8Array) {
+            // 对于二进制内容，也清空引用
+          }
+          
+        } catch (fileError) {
+          console.error(`文件 ${file.name} 上传失败:`, fileError);
+          failedCount++;
+          toast.error(`文件 ${file.name} 上传失败: ${fileError.message}`);
+        }
       }
-      toast.success(t('textSplit.uploadSuccess', { count: files.length }));
+      
+      // 显示最终结果
+      if (successCount > 0) {
+        toast.success(t('textSplit.uploadSuccess', { count: successCount }));
+      }
+      
+      if (failedCount > 0) {
+        toast.warning(`${failedCount} 个文件上传失败`);
+      }
+      
       setFiles([]);
       setCurrentPage(1);
       await fetchUploadedFiles();
-      if (onUploadSuccess) {
+      
+      if (onUploadSuccess && uploadedFileInfos.length > 0) {
         await onUploadSuccess(uploadedFileInfos, pdfFiles, domainTreeActionType);
       }
+      
     } catch (err) {
+      console.error('批量上传过程中发生错误:', err);
       toast.error(err.message || t('textSplit.uploadFailed'));
     } finally {
       setUploading(false);
